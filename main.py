@@ -3,8 +3,9 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-API_KEY = os.getenv("MEXC_API_KEY")
-API_SECRET = os.getenv("MEXC_API_SECRET")
+# API-Keys aus Umgebungsvariablen
+API_KEY = os.getenv("API_KEY")
+API_SECRET = os.getenv("API_SECRET")
 
 SYMBOL = "USELESSUSDT_PERP"
 LEVERAGE = 50
@@ -21,28 +22,30 @@ def mexc_request(path, params, signed=True):
     if signed:
         params["timestamp"] = int(time.time() * 1000)
         params["signature"] = sign(params)
-    return requests.post(url, json=params, headers=headers).json()
+    return requests.post(url, json=params, headers=headers)
 
-@app.route("/")
-def home():
+@app.route("/", methods=["GET"])
+def index():
     return "✅ MEXC bot läuft"
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    try:
-        data = request.get_json()
-        signal = data.get("signal")
+    data = request.get_json()
+    signal = data.get("signal")
 
-        if signal == "buy":
-            order = {
-                "symbol": SYMBOL,
-                "priceProtect": True,
-                "side": "BUY",
-                "type": "MARKET",
-                "quantity": 1
-            }
-            result = mexc_request("/api/v1/private/order", order)
-            return jsonify({"status": "ok", "response": result})
-        return jsonify({"status": "ignored"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    if signal == "buy":
+        order = {
+            "symbol": SYMBOL,
+            "priceProtect": True,
+            "side": "BUY",
+            "type": "MARKET",
+            "quantity": 1
+        }
+        response = mexc_request("/api/v1/private/order", order)
+        return jsonify({"status": "ok", "response": response.json()})
+
+    return jsonify({"status": "ignored"})
+
+# >>>>>> WICHTIG für Render <<<<<<
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000)
