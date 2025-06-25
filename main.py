@@ -3,7 +3,7 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-# API-Keys aus Render-Environment
+# API-Keys aus Umgebungsvariablen
 API_KEY = os.getenv("MEXC_API_KEY")
 API_SECRET = os.getenv("MEXC_API_SECRET")
 
@@ -17,19 +17,27 @@ def sign(params):
     return hmac.new(API_SECRET.encode(), qs.encode(), hashlib.sha256).hexdigest()
 
 def mexc_request(path, params, signed=True):
-    url = "https://api.mexc.com" + path
-    headers = {"ApiKey": API_KEY}
-    if signed:
-        params["timestamp"] = int(time.time() * 1000)
-        params["signature"] = sign(params)
-    return requests.post(url, json=params, headers=headers)
+    try:
+        url = "https://api.mexc.com" + path
+        headers = {"ApiKey": API_KEY}
+        if signed:
+            params["timestamp"] = int(time.time() * 1000)
+            params["signature"] = sign(params)
+        response = requests.post(url, json=params, headers=headers)
+        return response.json()
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.route("/", methods=["GET"])
+def index():
+    return "MEXC bot is online."
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
         data = request.get_json()
         signal = data.get("signal")
-
+        
         if signal == "buy":
             order = {
                 "symbol": SYMBOL,
@@ -38,14 +46,9 @@ def webhook():
                 "type": "MARKET",
                 "quantity": 1
             }
-
-            response = mexc_request("/api/v1/private/order", order)
-            return jsonify({"status": "ok", "response": response.json()})
-        return jsonify({"status": "ignored"})
-
+            result = mexc_request("/api/v1/private/order", order)
+            return jsonify({"status": "ok", "response": result})
+        else:
+            return jsonify({"status": "ignored"})
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-# Portbindung für Render
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+        return jsonify({"error": str(e)}), 500
