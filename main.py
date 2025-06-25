@@ -3,7 +3,7 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-# API-Keys aus Umgebungsvariablen
+# API-Keys aus Render-Environment
 API_KEY = os.getenv("MEXC_API_KEY")
 API_SECRET = os.getenv("MEXC_API_SECRET")
 
@@ -26,20 +26,26 @@ def mexc_request(path, params, signed=True):
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    data = request.get_json()
-    signal = data.get("signal")
+    try:
+        data = request.get_json()
+        signal = data.get("signal")
 
-    if signal == "buy":
-        order = {
-            "symbol": SYMBOL,
-            "priceProtect": True,
-            "side": "BUY",
-            "type": "MARKET",
-            "quantity": 1
-        }
+        if signal == "buy":
+            order = {
+                "symbol": SYMBOL,
+                "priceProtect": True,
+                "side": "BUY",
+                "type": "MARKET",
+                "quantity": 1
+            }
 
-        response = mexc_request("/api/v1/private/order", order)  # ✅ ← KORREKT
-        return jsonify({"status": "ok", "response": response.json()})
+            response = mexc_request("/api/v1/private/order", order)
+            return jsonify({"status": "ok", "response": response.json()})
+        return jsonify({"status": "ignored"})
 
-    return jsonify({"status": "ignored"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
+# Portbindung für Render
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
