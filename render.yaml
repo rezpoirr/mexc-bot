@@ -1,0 +1,13 @@
+
+services:
+  - type: web
+    name: mexc-bot
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: MEXC_API_KEY
+        value: "your_api_key_here"
+      - key: MEXC_API_SECRET
+        value: "your_api_secret_here"
