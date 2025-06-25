@@ -1,4 +1,3 @@
-
 import os, hmac, time, hashlib, requests
 from flask import Flask, request, jsonify
 
@@ -40,4 +39,9 @@ def webhook():
         }
         response = mexc_request("/api/v1/private/order", order)
         return jsonify({"status": "ok", "response": response.json()})
+
     return jsonify({"status": "ignored"})
+
+# WICHTIG: Port öffnen für Render
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000)
