@@ -5,8 +5,8 @@ from flask import Flask, request, jsonify
 app = Flask(__name__)
 
 # API-Keys aus Umgebungsvariablen
-API_KEY = os.getenv("MEXC_API_KEY")
-API_SECRET = os.getenv("MEXC_API_SECRET")
+API_KEY = os.getenv("API_KEY")
+API_SECRET = os.getenv("API_SECRET")
 
 SYMBOL = "USELESSUSDT_PERP"
 LEVERAGE = 50
