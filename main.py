@@ -29,31 +29,14 @@ def get_headers():
         "ApiKey": API_KEY
     }
 
-def get_balance():
-    url = f"{BASE_URL}/api/v1/private/account/assets"
-    timestamp = str(int(time.time() * 1000))
-    params = {"timestamp": timestamp}
-    full_url = f"{url}?{sign_params(params)}"
-    response = requests.post(full_url, headers=get_headers())
-    
-    try:
-        result = response.json()
-        for asset in result.get("data", []):
-            if asset["currency"] == "USDT":
-                print(f"✅ Futures-Guthaben: {asset['availableBalance']} USDT")
-                return float(asset["availableBalance"])
-    except Exception as e:
-        print("❌ Fehler beim Abrufen des Guthabens:", e)
-        print("Antwort:", response.text)
-    return 0.0
+# ⚠️ Testweise Bypass → immer "20 USDT Guthaben"
+def get_futures_balance():
+    return 20.0
 
 def place_futures_order(signal):
-    side = 1 if signal == "buy" else 2  # 1=Open long, 2=Open short
+    side = 1 if signal == "buy" else 2  # 1 = Open Long, 2 = Open Short
     timestamp = str(int(time.time() * 1000))
-    balance = get_balance()
-    
-    if balance < 1:
-        return {"error": "Balance zu niedrig"}
+    balance = get_futures_balance()
 
     quantity = round(balance * LEVERAGE / 100, 3)
 
