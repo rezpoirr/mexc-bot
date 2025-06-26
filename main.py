@@ -11,7 +11,7 @@ API_KEY = os.getenv("MEXC_API_KEY")
 API_SECRET = os.getenv("MEXC_API_SECRET")
 BASE_URL = "https://contract.mexc.com"
 
-SYMBOL = "USELESSUSDT"
+SYMBOL = os.getenv("SYMBOL")  # z. B. USELESSUSDT
 LEVERAGE = 50
 TP_PERCENT = 0.02
 SL_PERCENTAGES = [0.005, 0.0051, 0.0052, 0.0053, 0.0054, 0.0055]
@@ -22,7 +22,7 @@ def sign_params(params):
     sorted_params = sorted(params.items())
     query_string = "&".join(f"{key}={value}" for key, value in sorted_params)
     signature = hmac.new(API_SECRET.encode(), query_string.encode(), hashlib.sha256).hexdigest()
-    return signature
+    return query_string + f"&sign={signature}"
 
 def get_headers():
     return {
@@ -31,83 +31,93 @@ def get_headers():
     }
 
 def get_balance():
-    path = "/api/v1/private/account/assets"
+    url = f"{BASE_URL}/api/v1/private/account/assets"
     timestamp = str(int(time.time() * 1000))
-    params = {"timestamp": timestamp}
-    signature = sign_params(params)
-    url = f"{BASE_URL}{path}?timestamp={timestamp}&signature={signature}"
-    response = requests.get(url, headers=get_headers())
-    data = response.json()
-    for item in data.get("data", []):
-        if item["currency"] == "USDT":
-            return float(item["availableBalance"])
-    return 0
-
-def cancel_orders():
-    path = "/api/v1/private/order/cancel-all"
-    timestamp = str(int(time.time() * 1000))
-    params = {"symbol": SYMBOL, "timestamp": timestamp}
-    signature = sign_params(params)
-    url = f"{BASE_URL}{path}?timestamp={timestamp}&signature={signature}"
-    requests.post(url, headers=get_headers(), json=params)
-
-def close_position():
-    path = "/api/v1/private/position/close"
-    timestamp = str(int(time.time() * 1000))
-    params = {"symbol": SYMBOL, "timestamp": timestamp}
-    signature = sign_params(params)
-    url = f"{BASE_URL}{path}?timestamp={timestamp}&signature={signature}"
-    requests.post(url, headers=get_headers(), json=params)
-
-def place_order(side, quantity):
-    path = "/api/v1/private/order/submit"
-    timestamp = str(int(time.time() * 1000))
-    order_type = 1  # Market order
     params = {
-        "symbol": SYMBOL,
-        "price": 0,
-        "vol": quantity,
-        "side": 1 if side == "buy" else 2,
-        "type": order_type,
-        "open_type": 1,
-        "position_id": 0,
-        "leverage": LEVERAGE,
-        "external_oid": str(timestamp),
         "timestamp": timestamp
     }
-    signature = sign_params(params)
-    url = f"{BASE_URL}{path}?timestamp={timestamp}&signature={signature}"
-    return requests.post(url, headers=get_headers(), json=params)
+    signed_query = sign_params(params)
+    full_url = f"{url}?{signed_query}"
+    response = requests.get(full_url, headers=get_headers())
+    data = response.json()
+    for asset in data.get("data", []):
+        if asset.get("currency") == "USDT":
+            return float(asset.get("availableBalance", 0))
+    return 0.0
+
+def place_order(signal):
+    global current_position
+
+    side = 1 if signal == "buy" else 2  # 1 = buy/long, 2 = sell/short
+    close_side = 2 if signal == "buy" else 1
+    balance = get_balance()
+    order_value = balance * 0.5 * LEVERAGE
+
+    url = f"{BASE_URL}/api/v1/private/order/submit"
+    timestamp = str(int(time.time() * 1000))
+    order_data = {
+        "symbol": SYMBOL,
+        "price": 0,  # market order
+        "vol": round(order_value, 2),
+        "leverage": LEVERAGE,
+        "side": side,
+        "type": 1,  # 1 = market
+        "open_type": "isolated",
+        "position_id": 0,
+        "external_oid": str(int(time.time())),
+        "stop_loss_price": 0,
+        "take_profit_price": 0,
+        "timestamp": timestamp
+    }
+
+    signed_query = sign_params(order_data)
+    full_url = f"{url}?{signed_query}"
+
+    response = requests.post(full_url, headers=get_headers())
+    print(f"Order response: {response.text}")
+
+    if response.status_code == 200 and response.json().get("success"):
+        print(f"Order erfolgreich: {signal}")
+        current_position = signal
+        set_tp_sl(signal)
+    else:
+        print(f"Order fehlgeschlagen: {response.text}")
+
+def set_tp_sl(signal):
+    direction = 1 if signal == "buy" else -1
+    current_price = get_market_price()
+    tp_price = round(current_price * (1 + direction * TP_PERCENT), 4)
+
+    for i, sl_pct in enumerate(SL_PERCENTAGES):
+        sl_price = round(current_price * (1 - direction * sl_pct), 4)
+        print(f"Set SL-{i+1}: {sl_price}")
+
+    print(f"Set TP: {tp_price}")
+
+def get_market_price():
+    url = f"{BASE_URL}/api/v1/contract/market_price?symbol={SYMBOL}"
+    response = requests.get(url)
+    data = response.json()
+    return float(data.get("data", {}).get("price", 0))
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
     global current_position
+    data = request.get_json()
+    signal = data.get("signal")
 
-    signal = request.json.get("signal")
-    if not signal or signal not in ["buy", "sell"]:
-        return jsonify({"error": "Invalid signal"}), 400
+    if signal not in ["buy", "sell"]:
+        return jsonify({"error": "Ungültiges Signal"}), 400
 
-    try:
-        print(f"Signal empfangen: {signal}")
-        cancel_orders()
-        if current_position:
-            print("Schließe vorherigen Trade")
-            close_position()
+    print(f"Webhook-Signal empfangen: {signal}")
 
-        balance = get_balance()
-        quantity = round((balance * 0.5 * LEVERAGE), 2)
-        print(f"Placing {signal} order with qty: {quantity}")
+    if current_position != signal:
+        print(f"Starte neuen Trade: {signal}")
+        place_order(signal)
+    else:
+        print(f"Signal {signal} ignoriert – bereits in Position.")
 
-        result = place_order(signal, quantity)
-        print("Order gesetzt:", result.json())
-
-        current_position = signal
-
-        return jsonify({"msg": f"Signal {signal} empfangen", "status": "ok"})
-
-    except Exception as e:
-        print("Fehler:", str(e))
-        return jsonify({"error": str(e)}), 500
+    return jsonify({"msg": f"Signal {signal} empfangen", "status": "ok"})
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    app.run(debug=False, host="0.0.0.0", port=10000)
