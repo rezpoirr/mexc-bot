@@ -30,19 +30,21 @@ def get_headers():
     }
 
 def get_balance():
-    url = f"{BASE_URL}/api/v1/private/account/assets"
+    url = f"{BASE_URL}/api/v1/private/account/asset"
     timestamp = str(int(time.time() * 1000))
     params = {"timestamp": timestamp}
     full_url = f"{url}?{sign_params(params)}"
     response = requests.get(full_url, headers=get_headers())
+    
     try:
-        balance_data = response.json()
-        for asset in balance_data.get("data", []):
-            if asset["currency"] == "USDT":
-                return float(asset["availableBalance"])
+        result = response.json()
+        for asset in result.get("data", []):
+            if asset["symbol"] == SYMBOL:
+                return float(asset["availablePosition"])
     except:
         pass
     return 0.0
+
 
 def place_futures_order(signal):
     side = 1 if signal == "buy" else 2  # 1=Open long, 2=Open short
