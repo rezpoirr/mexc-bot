@@ -1,24 +1,26 @@
-import os
-import hmac
-import time
-import hashlib
-import requests
 from flask import Flask, request, jsonify
+import hmac
+import hashlib
+import time
+import requests
+import os
 
 app = Flask(__name__)
 
-# === MEXC API Credentials from environment variables ===
-API_KEY = os.environ.get("MEXC_API_KEY")
-API_SECRET = os.environ.get("MEXC_API_SECRET")
-BASE_URL = "https://api.mexc.com"
+API_KEY = os.getenv("MEXC_API_KEY")
+API_SECRET = os.getenv("MEXC_API_SECRET")
+BASE_URL = "https://contract.mexc.com"
 
-# === Global to track open position ===
+SYMBOL = "USELESSUSDT"
+LEVERAGE = 50
+TP_PERCENT = 0.02
+SL_PERCENTAGES = [0.005, 0.0051, 0.0052, 0.0053, 0.0054, 0.0055]
+
 current_position = None
 
-# === Utility functions ===
-def sign_request(params):
+def sign_params(params):
     sorted_params = sorted(params.items())
-    query_string = "&".join(f"{k}={v}" for k, v in sorted_params)
+    query_string = "&".join(f"{key}={value}" for key, value in sorted_params)
     signature = hmac.new(API_SECRET.encode(), query_string.encode(), hashlib.sha256).hexdigest()
     return signature
 
@@ -29,98 +31,83 @@ def get_headers():
     }
 
 def get_balance():
-    url = f"{BASE_URL}/api/v2/private/account/assets"
+    path = "/api/v1/private/account/assets"
     timestamp = str(int(time.time() * 1000))
+    params = {"timestamp": timestamp}
+    signature = sign_params(params)
+    url = f"{BASE_URL}{path}?timestamp={timestamp}&signature={signature}"
+    response = requests.get(url, headers=get_headers())
+    data = response.json()
+    for item in data.get("data", []):
+        if item["currency"] == "USDT":
+            return float(item["availableBalance"])
+    return 0
+
+def cancel_orders():
+    path = "/api/v1/private/order/cancel-all"
+    timestamp = str(int(time.time() * 1000))
+    params = {"symbol": SYMBOL, "timestamp": timestamp}
+    signature = sign_params(params)
+    url = f"{BASE_URL}{path}?timestamp={timestamp}&signature={signature}"
+    requests.post(url, headers=get_headers(), json=params)
+
+def close_position():
+    path = "/api/v1/private/position/close"
+    timestamp = str(int(time.time() * 1000))
+    params = {"symbol": SYMBOL, "timestamp": timestamp}
+    signature = sign_params(params)
+    url = f"{BASE_URL}{path}?timestamp={timestamp}&signature={signature}"
+    requests.post(url, headers=get_headers(), json=params)
+
+def place_order(side, quantity):
+    path = "/api/v1/private/order/submit"
+    timestamp = str(int(time.time() * 1000))
+    order_type = 1  # Market order
     params = {
+        "symbol": SYMBOL,
+        "price": 0,
+        "vol": quantity,
+        "side": 1 if side == "buy" else 2,
+        "type": order_type,
+        "open_type": 1,
+        "position_id": 0,
+        "leverage": LEVERAGE,
+        "external_oid": str(timestamp),
         "timestamp": timestamp
     }
-    params["signature"] = sign_request(params)
-    response = requests.get(url, headers=get_headers(), params=params)
-    data = response.json()
-    for asset in data.get("data", []):
-        if asset["asset"] == "USDT":
-            return float(asset["availableBalance"])
-    return 0.0
+    signature = sign_params(params)
+    url = f"{BASE_URL}{path}?timestamp={timestamp}&signature={signature}"
+    return requests.post(url, headers=get_headers(), json=params)
 
-def close_position(symbol):
-    print("⚠️ Schließe bestehende Position")
-    order = {
-        "symbol": symbol,
-        "price": 0,  # Market
-        "vol": 0,  # Dynamisch (nur bei Position)
-        "side": 3,  # Close long
-        "type": 1,  # Market
-        "open_type": "close",
-        "position_id": 0,
-        "leverage": 50,
-        "external_oid": f"close_{int(time.time())}",
-        "stop_loss_price": 0,
-        "take_profit_price": 0,
-        "position_mode": "single",
-        "reduce_only": True,
-        "timestamp": str(int(time.time() * 1000))
-    }
-    order["signature"] = sign_request(order)
-    r = requests.post(f"{BASE_URL}/api/v1/private/order/submit", headers=get_headers(), json=order)
-    print(f"⛔️ Position geschlossen: {r.text}")
-
-def place_order(signal):
-    global current_position
-    balance = get_balance()
-    print(f"💰 Aktuelles Balance: {balance:.2f} USDT")
-
-    if not balance or balance < 1:
-        print("❌ Nicht genug Guthaben")
-        return
-
-    amount_usdt = balance * 0.5
-    symbol = "USELESSUSDT"
-
-    if current_position:
-        close_position(symbol)
-        current_position = None
-        time.sleep(1)
-
-    side = 1 if signal == "buy" else 2
-    stop_losses = [0.005 + i * 0.0001 for i in range(6)]
-    for i, sl in enumerate(stop_losses):
-        order = {
-            "symbol": symbol,
-            "price": 0,
-            "vol": round(amount_usdt / 0.123, 2),  # Dummy price (update!)
-            "side": side,
-            "type": 1,
-            "open_type": "isolated",
-            "position_id": 0,
-            "leverage": 50,
-            "external_oid": f"order_{i}_{int(time.time())}",
-            "stop_loss_price": round(0.123 * (1 - sl), 5),
-            "take_profit_price": round(0.123 * 1.02, 5),
-            "position_mode": "single",
-            "reduce_only": False,
-            "timestamp": str(int(time.time() * 1000))
-        }
-        order["signature"] = sign_request(order)
-        r = requests.post(f"{BASE_URL}/api/v1/private/order/submit", headers=get_headers(), json=order)
-        print(f"📦 Order {i+1}: {r.text}")
-
-    current_position = signal
-    print(f"✅ Neue Position: {signal}")
-
-# === Webhook endpoint ===
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    data = request.get_json()
-    signal = data.get("signal")
+    global current_position
 
-    if signal in ["buy", "sell"]:
-        print(f"📨 Signal empfangen: {signal}")
-        place_order(signal)
-        return jsonify({"status": "ok", "msg": f"Signal {signal} empfangen"}), 200
-    else:
-        return jsonify({"status": "error", "msg": "Ungültiges Signal"}), 400
+    signal = request.json.get("signal")
+    if not signal or signal not in ["buy", "sell"]:
+        return jsonify({"error": "Invalid signal"}), 400
 
-# === Server für Render ===
+    try:
+        print(f"Signal empfangen: {signal}")
+        cancel_orders()
+        if current_position:
+            print("Schließe vorherigen Trade")
+            close_position()
+
+        balance = get_balance()
+        quantity = round((balance * 0.5 * LEVERAGE), 2)
+        print(f"Placing {signal} order with qty: {quantity}")
+
+        result = place_order(signal, quantity)
+        print("Order gesetzt:", result.json())
+
+        current_position = signal
+
+        return jsonify({"msg": f"Signal {signal} empfangen", "status": "ok"})
+
+    except Exception as e:
+        print("Fehler:", str(e))
+        return jsonify({"error": str(e)}), 500
+
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=10000)
