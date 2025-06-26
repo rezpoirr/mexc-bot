@@ -30,20 +30,22 @@ def get_headers():
     }
 
 def get_balance():
-    url = f"{BASE_URL}/api/v1/private/account/asset"
+    url = f"{BASE_URL}/api/v1/private/account/assets"
     timestamp = str(int(time.time() * 1000))
     params = {"timestamp": timestamp}
     full_url = f"{url}?{sign_params(params)}"
-    response = requests.get(full_url, headers=get_headers())
-    
+    response = requests.post(full_url, headers=get_headers())
+
     try:
         result = response.json()
         for asset in result.get("data", []):
-            if asset["symbol"] == SYMBOL:
-                return float(asset["availablePosition"])
-    except:
-        pass
+            if asset["currency"] == "USDT":
+                return float(asset["availableBalance"])
+    except Exception as e:
+        print(f"Fehler beim Abrufen des Guthabens: {e}")
+        print("Antwort:", response.text)
     return 0.0
+
 
 
 def place_futures_order(signal):
