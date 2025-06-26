@@ -1,98 +1,95 @@
 import os
-import time
 import json
+import time
+import hmac
+import hashlib
+import requests
 from flask import Flask, request, jsonify
-from mexc_futures_api import MexcFutures
 
 app = Flask(__name__)
 
-API_KEY = os.getenv("API_KEY")
-API_SECRET = os.getenv("API_SECRET")
-
-client = MexcFutures(API_KEY, API_SECRET)
+API_KEY = os.getenv('API_KEY')
+API_SECRET = os.getenv('API_SECRET')
+BASE_URL = "https://contract.mexc.com"
 
 symbol = "USELESSUSDT"
 leverage = 50
 tp_percent = 0.02
 sl_levels = [0.005, 0.0051, 0.0052, 0.0053, 0.0054, 0.0055]
-current_position = None  # "long" oder "short"
+current_position = None  # "long", "short", or None
+
+
+def sign_request(req_time, params):
+    query_string = '&'.join([f"{key}={value}" for key, value in params.items()])
+    to_sign = f"{API_KEY}{req_time}{query_string}"
+    signature = hmac.new(API_SECRET.encode(), to_sign.encode(), hashlib.sha256).hexdigest()
+    return signature
+
+
+def get_headers(params={}):
+    req_time = str(int(time.time() * 1000))
+    signature = sign_request(req_time, params)
+    return {
+        "ApiKey": API_KEY,
+        "Request-Time": req_time,
+        "Signature": signature,
+        "Content-Type": "application/json"
+    }
 
 
 def get_balance():
-    account_info = client.get_account_information()
-    return float(account_info["availableBalance"])
+    url = f"{BASE_URL}/api/v1/private/account/assets"
+    headers = get_headers()
+    resp = requests.get(url, headers=headers).json()
+    for asset in resp.get("data", []):
+        if asset["currency"] == "USDT":
+            return float(asset["availableBalance"])
+    return 0.0
 
 
-def get_last_price():
-    ticker = client.get_latest_price(symbol=symbol)
-    return float(ticker["price"])
+def cancel_all_orders():
+    url = f"{BASE_URL}/api/v1/private/order/cancel-all"
+    data = {"symbol": symbol}
+    headers = get_headers(data)
+    requests.post(url, headers=headers, data=json.dumps(data))
 
 
 def close_position():
     global current_position
-    if current_position:
-        side = "SELL" if current_position == "long" else "BUY"
-        try:
-            client.close_position(symbol=symbol, side=side)
-        except Exception as e:
-            print("Fehler beim Schließen der Position:", e)
-        current_position = None
+    if not current_position:
+        return
+    side = "SELL" if current_position == "long" else "BUY"
+    url = f"{BASE_URL}/api/v1/private/order/close-position"
+    data = {"symbol": symbol, "side": side}
+    headers = get_headers(data)
+    requests.post(url, headers=headers, data=json.dumps(data))
+    current_position = None
 
 
 def place_order(signal):
     global current_position
     balance = get_balance()
-    last_price = get_last_price()
-
-    trade_size_usdt = balance * 0.5
-    quantity = round((trade_size_usdt * leverage) / last_price, 2)
+    position_size = round(balance * 0.5 * leverage, 2)
     side = "BUY" if signal == "buy" else "SELL"
-    current_position = "long" if side == "BUY" else "short"
+    current_position = "long" if signal == "buy" else "short"
 
-    # TP und SL berechnen
-    if side == "BUY":
-        tp_price = round(last_price * (1 + tp_percent), 4)
-        sl_prices = [round(last_price * (1 - sl), 4) for sl in sl_levels]
-    else:
-        tp_price = round(last_price * (1 - tp_percent), 4)
-        sl_prices = [round(last_price * (1 + sl), 4) for sl in sl_levels]
-
-    # Market Order öffnen
-    try:
-        response = client.create_order(
-            symbol=symbol,
-            side=side,
-            type="market",
-            quantity=quantity,
-            leverage=leverage
-        )
-        print(f"{side} Order platziert mit {quantity} USELESSUSDT")
-
-        # TP Order
-        client.create_order(
-            symbol=symbol,
-            side="SELL" if side == "BUY" else "BUY",
-            type="take_profit_market",
-            stopPrice=tp_price,
-            quantity=quantity,
-            leverage=leverage
-        )
-        print(f"TP gesetzt bei {tp_price}")
-
-        # SL Orders
-        for idx, sl_price in enumerate(sl_prices):
-            client.create_order(
-                symbol=symbol,
-                side="SELL" if side == "BUY" else "BUY",
-                type="stop_market",
-                stopPrice=sl_price,
-                quantity=quantity,
-                leverage=leverage
-            )
-            print(f"SL {idx+1} gesetzt bei {sl_price}")
-
-    except Exception as e:
-        print("Fehler beim Platzieren der Order:", e)
+    # Dummy price used for now (price=0 for market order)
+    order_data = {
+        "symbol": symbol,
+        "price": 0,
+        "vol": position_size,
+        "side": side,
+        "type": 1,  # 1 = Market
+        "open_type": "isolated",
+        "position_id": 0,
+        "leverage": leverage,
+        "external_oid": str(int(time.time() * 1000)),
+        "stop_loss_price": 0,
+        "take_profit_price": 0
+    }
+    headers = get_headers(order_data)
+    response = requests.post(f"{BASE_URL}/api/v1/private/order/submit", headers=headers, data=json.dumps(order_data))
+    print("Order Response:", response.text)
 
 
 @app.route("/webhook", methods=["POST"])
@@ -102,16 +99,20 @@ def webhook():
     signal = data.get("signal")
 
     if signal not in ["buy", "sell"]:
-        return jsonify({"status": "error", "msg": "Ungültiges Signal"})
+        return jsonify({"error": "Invalid signal"}), 400
 
     if current_position:
         close_position()
 
+    cancel_all_orders()
     place_order(signal)
 
     return jsonify({
-        "status": "ok",
-        "msg": f"Signal {signal} empfangen und Trade platziert"
+        "response": {
+            "code": 200,
+            "msg": f"Signal {signal} empfangen"
+        },
+        "status": "ok"
     })
 
 
