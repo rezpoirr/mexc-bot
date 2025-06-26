@@ -35,23 +35,23 @@ def get_balance():
     params = {"timestamp": timestamp}
     full_url = f"{url}?{sign_params(params)}"
     response = requests.post(full_url, headers=get_headers())
-
+    
     try:
         result = response.json()
         for asset in result.get("data", []):
             if asset["currency"] == "USDT":
+                print(f"✅ Futures-Guthaben: {asset['availableBalance']} USDT")
                 return float(asset["availableBalance"])
     except Exception as e:
-        print(f"Fehler beim Abrufen des Guthabens: {e}")
+        print("❌ Fehler beim Abrufen des Guthabens:", e)
         print("Antwort:", response.text)
     return 0.0
-
-
 
 def place_futures_order(signal):
     side = 1 if signal == "buy" else 2  # 1=Open long, 2=Open short
     timestamp = str(int(time.time() * 1000))
     balance = get_balance()
+    
     if balance < 1:
         return {"error": "Balance zu niedrig"}
 
