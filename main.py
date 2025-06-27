@@ -1,113 +1,87 @@
-from flask import Flask, request, jsonify
-import hmac
-import hashlib
+import os
 import time
 import requests
-import os
+import hmac, hashlib
 
-app = Flask(__name__)
-
-# 🔐 Environment-Variablen
 API_KEY = os.getenv("MEXC_API_KEY")
 API_SECRET = os.getenv("MEXC_API_SECRET")
-BASE_URL = "https://contract.mexc.com"
-
-# 📈 Trading-Einstellungen
-SYMBOL = os.getenv("SYMBOL", "USELESSUSDT_PERP")
+SYMBOL = os.getenv("SYMBOL", "USELESSUSDT")
 LEVERAGE = 50
-ORDER_TYPE = 1         # Market
-POSITION_MODE = 1      # Single Position
-OPEN_TYPE = "isolated" # Isoliert
+USE_BALANCE_PCT = 0.5
 
-# 🔏 Signiere alle Parameter
-def sign_params(params):
-    sorted_params = sorted(params.items())
-    query = "&".join(f"{k}={v}" for k, v in sorted_params)
-    signature = hmac.new(API_SECRET.encode(), query.encode(), hashlib.sha256).hexdigest()
-    return f"{query}&signature={signature}"
+# --- Bypass-Funktionen (vereinfacht) ---
+def sign_payload(payload: dict):
+    payload["api_key"] = API_KEY
+    payload["req_time"] = int(time.time() * 1000)
+    payload["sign"] = hmac.new(API_SECRET.encode(), urlencode(payload).encode(), hashlib.sha256).hexdigest()
+    return payload
 
-# 🧾 Authentifizierungs-Header
-def get_headers():
-    return {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "ApiKey": API_KEY
-    }
+def bypass_create_order(side, qty):
+    payload = {"symbol": SYMBOL, "price": 0, "vol": qty, "side": 1 if side=="BUY" else 2,
+               "type": 1, "open_type": "isolated", "position_id":0, "leverage":LEVERAGE, "external_oid":"bot"}
+    r = requests.post("https://www.mexc.com/api/v1/private/order/submit",
+                      data=sign_payload(payload), timeout=5)
+    return r.json()
 
-# 💰 Aktuelles USDT-Futures-Guthaben abrufen
-def get_balance():
-    url = f"{BASE_URL}/api/v1/private/account/asset"
-    timestamp = str(int(time.time() * 1000))
-    params = {"timestamp": timestamp}
-    full_url = f"{url}?{sign_params(params)}"
-    response = requests.get(full_url, headers=get_headers())
+def bypass_cancel_all():
+    payload = {"symbol": SYMBOL}
+    r = requests.post("https://www.mexc.com/api/v1/private/order/cancelAll",
+                      data=sign_payload(payload), timeout=5)
+    return r.json()
 
-    print("📦 API-Antwort (Balance):", response.text)
-
-    try:
-        result = response.json()
-        for asset in result.get("data", []):
-            if asset["currency"] == "USDT":
-                balance = float(asset["availableBalance"])
-                print(f"✅ Verfügbares USDT (Futures): {balance}")
-                return balance
-    except Exception as e:
-        print("❌ Fehler beim Auslesen der Balance:", e)
-
+def bypass_get_balance():
+    payload = {}
+    r = requests.get("https://www.mexc.com/api/v1/private/account/info",
+                     params=sign_payload(payload), timeout=5)
+    data = r.json()
+    for c in data["data"]:
+        if c["currency"] == "USDT": return float(c["availableBalance"])
     return 0.0
 
-# 📤 Order senden
-def place_futures_order(signal):
-    side = 1 if signal == "buy" else 2
-    timestamp = str(int(time.time() * 1000))
-    balance = get_balance()
+def bypass_get_mark_price():
+    r = requests.get(f"https://www.mexc.com/api/v1/contract/market/price?symbol={SYMBOL}")
+    return float(r.json()["data"]["markPrice"])
 
-    if balance < 1:
-        return {"error": f"Balance zu niedrig: {balance} USDT"}
+# --- Heikin-Ashi Dummy-Signal (einfacher Platzhalter) ---
+def get_heikin_signal():
+    # Hier deine Logik einfügen
+    # Beispiel: return "BUY", "SELL" oder None
+    return None
 
-    quantity = round(balance * LEVERAGE / 100, 3)
-    print(f"📊 Order-Menge: {quantity} USELESSUSDT @ Leverage {LEVERAGE}x")
+# --- Hauptlogik ---
+def main():
+    position_open = False
+    position_side = None
+    entry_price = None
+    qty = 0
 
-    order = {
-        "symbol": SYMBOL,
-        "price": 0,
-        "vol": quantity,
-        "leverage": LEVERAGE,
-        "side": side,
-        "type": ORDER_TYPE,
-        "open_type": OPEN_TYPE,
-        "position_id": 0,
-        "external_oid": timestamp,
-        "stop_loss_price": 0,
-        "take_profit_price": 0,
-        "position_mode": POSITION_MODE,
-        "reduce_only": False,
-        "timestamp": timestamp
-    }
+    while True:
+        signal = get_heikin_signal()
+        mark = bypass_get_mark_price()
 
-    signed = sign_params(order)
-    url = f"{BASE_URL}/api/v1/private/order/submit?{signed}"
-    response = requests.post(url, headers=get_headers())
+        if position_open:
+            tp = entry_price * 1.02
+            sl_targets = [entry_price * (1 - x) for x in [0.005, 0.051,0.052,0.053,0.054,0.055]]
+            if mark >= tp or any(mark <= sl for sl in sl_targets):
+                bypass_cancel_all()
+                position_open = False
+                log = f"📉 Closed {position_side} @ {mark:.5f}"
+                print(log)
 
-    print(f"📤 Order-Antwort: {response.status_code} → {response.text}")
-    return response.json()
+        if signal and (not position_open or position_side != signal):
+            if position_open:
+                bypass_cancel_all()
+            bal = bypass_get_balance()
+            qty = bal * USE_BALANCE_PCT * LEVERAGE / mark
+            res = bypass_create_order(signal, qty)
+            if res.get("success", False):
+                entry_price = mark
+                position_open = True
+                position_side = signal
+                print(f"🟢 Opened {signal} @ {mark:.5f}, qty={qty:.2f}")
+            else:
+                print("❌ Order failed:", res)
+        time.sleep(1)
 
-# 🌐 Webhook-Route
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    data = request.get_json()
-    signal = data.get("signal", "").lower()
-
-    if signal not in ["buy", "sell"]:
-        return jsonify({"error": "Ungültiges Signal"}), 400
-
-    print(f"🚨 Webhook empfangen: {signal.upper()}")
-    result = place_futures_order(signal)
-
-    if "error" in result:
-        return jsonify({"status": "error", "msg": result["error"]}), 400
-    return jsonify({"status": "ok", "msg": f"Order {signal} gesendet", "result": result})
-
-# ▶️ Lokaler Start (für Render wichtig)
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    main()
