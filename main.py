@@ -35,20 +35,19 @@ def get_balance():
     params = {"timestamp": timestamp}
     full_url = f"{url}?{sign_params(params)}"
     response = requests.post(full_url, headers=get_headers())
+    
+    print("📦 API-Antwort von get_balance():", response.text)
 
     try:
-        print("🔍 FULL RAW BALANCE RESPONSE:")
-        print(response.text)
-
         result = response.json()
         for asset in result.get("data", []):
             if asset["currency"] == "USDT":
-                print(f"✅ Gefundene Balance: {asset['availableBalance']} USDT")
+                print(f"✅ Gefundener Kontostand: {asset['availableBalance']} USDT")
                 return float(asset["availableBalance"])
     except Exception as e:
-        print("❌ Fehler beim Abrufen des Guthabens:", e)
-        print("Antwort:", response.text)
+        print("❌ Fehler beim Parsen:", e)
     return 0.0
+
 
 def place_futures_order(signal):
     side = 1 if signal == "buy" else 2  # 1 = Long, 2 = Short
