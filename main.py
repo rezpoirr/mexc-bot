@@ -10,11 +10,10 @@ app = Flask(__name__)
 API_KEY = os.getenv("MEXC_API_KEY")
 API_SECRET = os.getenv("MEXC_API_SECRET")
 BASE_URL = "https://contract.mexc.com"
-
-SYMBOL = os.getenv("SYMBOL", "BTC_USDT")
+SYMBOL = os.getenv("SYMBOL", "USELESSUSDT")
 LEVERAGE = 50
-POSITION_MODE = 1  # Single
-ORDER_TYPE = 1     # Market
+ORDER_TYPE = 1     # 1 = Market Order
+POSITION_MODE = 1  # 1 = Single
 OPEN_TYPE = "isolated"
 
 def sign_params(params):
@@ -30,20 +29,20 @@ def get_headers():
     }
 
 def get_balance():
-    url = f"{BASE_URL}/api/v1/private/account/asset"
+    url = f"{BASE_URL}/api/v1/private/account/assets"
     timestamp = str(int(time.time() * 1000))
     params = {"timestamp": timestamp}
     full_url = f"{url}?{sign_params(params)}"
-    response = requests.get(full_url, headers=get_headers())
+    response = requests.post(full_url, headers=get_headers())
 
-    print("📦 Antwort von MEXC get_balance:", response.text)
+    print("📦 Antwort von Balance Endpoint:", response.text)
 
     try:
-        data = response.json().get("data", [])
-        for item in data:
-            if item["currency"] == "USDT":
-                balance = float(item["availableBalance"])
-                print(f"✅ USDT-Futures Balance: {balance}")
+        result = response.json()
+        for asset in result.get("data", []):
+            if asset["currency"] == "USDT":
+                balance = float(asset["availableBalance"])
+                print(f"✅ Futures Balance USDT: {balance}")
                 return balance
     except Exception as e:
         print("❌ Fehler beim Auslesen der Balance:", e)
@@ -58,7 +57,8 @@ def place_futures_order(signal):
     if balance < 1:
         return {"error": f"Balance zu niedrig: {balance} USDT"}
 
-    quantity = round((balance * 0.5) * LEVERAGE, 3)
+    quantity = round(balance * LEVERAGE / 100, 3)
+    print(f"📊 Berechnete Menge: {quantity} – basierend auf Balance {balance}")
 
     order = {
         "symbol": SYMBOL,
@@ -81,7 +81,7 @@ def place_futures_order(signal):
     url = f"{BASE_URL}/api/v1/private/order/submit?{signed}"
     response = requests.post(url, headers=get_headers())
 
-    print(f"📤 Order-Senden: {response.status_code} → {response.text}")
+    print(f"📤 Order-Antwort: {response.status_code} → {response.text}")
     return response.json()
 
 @app.route("/webhook", methods=["POST"])
