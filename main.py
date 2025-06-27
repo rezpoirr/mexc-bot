@@ -11,15 +11,15 @@ API_KEY = os.getenv("MEXC_API_KEY")
 API_SECRET = os.getenv("MEXC_API_SECRET")
 BASE_URL = "https://contract.mexc.com"
 
-SYMBOL = os.getenv("SYMBOL", "USELESSUSDT")
+SYMBOL = os.getenv("SYMBOL", "BTC_USDT")
 LEVERAGE = 50
-POSITION_MODE = 1  # 1 = Single-Position Mode
-ORDER_TYPE = 1     # 1 = Market Order
+POSITION_MODE = 1  # Single
+ORDER_TYPE = 1     # Market
 OPEN_TYPE = "isolated"
 
 def sign_params(params):
     sorted_params = sorted(params.items())
-    query_string = "&".join(f"{key}={value}" for key, value in sorted_params)
+    query_string = "&".join(f"{k}={v}" for k, v in sorted_params)
     signature = hmac.new(API_SECRET.encode(), query_string.encode(), hashlib.sha256).hexdigest()
     return f"{query_string}&signature={signature}"
 
@@ -30,33 +30,33 @@ def get_headers():
     }
 
 def get_balance():
-    url = f"{BASE_URL}/api/v1/private/account/assets"
+    url = f"{BASE_URL}/api/v1/private/account/asset"
     timestamp = str(int(time.time() * 1000))
     params = {"timestamp": timestamp}
     full_url = f"{url}?{sign_params(params)}"
-    response = requests.post(full_url, headers=get_headers())
-    
-    print("📦 API-Antwort von get_balance():", response.text)
+    response = requests.get(full_url, headers=get_headers())
+
+    print("📦 Antwort von MEXC get_balance:", response.text)
 
     try:
-        result = response.json()
-        for asset in result.get("data", []):
-            if asset["currency"] == "USDT":
-                print(f"✅ Gefundener Kontostand: {asset['availableBalance']} USDT")
-                return float(asset["availableBalance"])
+        data = response.json().get("data", [])
+        for item in data:
+            if item["currency"] == "USDT":
+                balance = float(item["availableBalance"])
+                print(f"✅ USDT-Futures Balance: {balance}")
+                return balance
     except Exception as e:
-        print("❌ Fehler beim Parsen:", e)
+        print("❌ Fehler beim Auslesen der Balance:", e)
+
     return 0.0
 
-
 def place_futures_order(signal):
-    side = 1 if signal == "buy" else 2  # 1 = Long, 2 = Short
+    side = 1 if signal == "buy" else 2
     timestamp = str(int(time.time() * 1000))
     balance = get_balance()
 
     if balance < 1:
-        print("⚠️ Balance zu niedrig:", balance)
-        return {"error": "Balance zu niedrig"}
+        return {"error": f"Balance zu niedrig: {balance} USDT"}
 
     quantity = round((balance * 0.5) * LEVERAGE, 3)
 
@@ -81,7 +81,7 @@ def place_futures_order(signal):
     url = f"{BASE_URL}/api/v1/private/order/submit?{signed}"
     response = requests.post(url, headers=get_headers())
 
-    print(f"📤 Order gesendet ({signal.upper()}): {response.status_code} {response.text}")
+    print(f"📤 Order-Senden: {response.status_code} → {response.text}")
     return response.json()
 
 @app.route("/webhook", methods=["POST"])
@@ -92,12 +92,12 @@ def webhook():
     if signal not in ["buy", "sell"]:
         return jsonify({"error": "Ungültiges Signal"}), 400
 
-    print(f"🚨 Signal empfangen: {signal}")
+    print(f"🚨 Webhook empfangen: {signal}")
     result = place_futures_order(signal)
 
     if "error" in result:
         return jsonify({"status": "error", "msg": result["error"]}), 400
-    return jsonify({"status": "ok", "msg": f"Order {signal} gesetzt", "result": result})
+    return jsonify({"status": "ok", "msg": f"Order {signal} gesendet", "result": result})
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
